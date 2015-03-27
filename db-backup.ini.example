@@ -1,0 +1,35 @@
+;<?php
+
+;exit; //For added security; see: http://php.net/manual/en/function.parse-ini-file.php#99474
+
+;/*
+
+[connection]
+
+;The hostname for the server on which the target database(s) reside(s).
+
+hostname="127.0.0.1"
+
+;The user as whom to execute the "mysqldump" executable.
+;This user need not necessarily be the root MySQL user, but the specific user
+;should have access rights that are sufficient to backup the target database(s).
+
+username="root"
+
+;The above user's password. Note that it would be more "secure" to pass this
+;value interactively, but doing so also goes against the premise of automating
+;backups in an unattended capacity. Maximally restrictive permissions should be
+;set on this .ini file, however, to minimize the potential for other system
+;users to read its contents.
+
+password="password"
+
+[backup]
+
+;The directory into which databases will be dumped.
+
+dumpdir="/mysql-backup/db-backups"
+
+;*/
+
+;?>

@@ -7,28 +7,33 @@
 [connection]
 
 ;The hostname for the server on which the target database(s) reside(s).
+;On UNIX-like systems, use "localhost" to connect over a UNIX socket (this is
+;necessary to authenticate using MySQL's "auth_socket" plugin, or MariaDB's
+;"UNIX_SOCKET" plugin).
 
-hostname="127.0.0.1"
+hostname="localhost"
 
-;The user as whom to execute the "mysqldump" executable.
+;The user as whom to query the list of database names to be backed-up, and then
+;call the "mysqldump" executable against each.
 ;This user need not necessarily be the root MySQL user, but the specific user
 ;should have access rights that are sufficient to backup the target database(s).
 
-username="root"
+username="mysql-backup"
 
-;The above user's password. Note that it would be more "secure" to pass this
-;value interactively, but doing so also goes against the premise of automating
-;backups in an unattended capacity. Maximally restrictive permissions should be
-;set on this .ini file, however, to minimize the potential for other system
-;users to read its contents.
+;Supplying a password here is highly discouraged, due to the potential for other
+;system users to discern the value. It is far more secure to use a socket
+;authentication plugin (MySQL and MariaDB each have one) so that supplying a
+;password is not necessary. If authenticating by socket plugin is not an option,
+;maximally restrictive permissions should be set on this .ini file! 
 
-password="password"
+;password=""
 
 [backup]
 
-;The directory into which databases will be dumped.
+;The directory into which databases will be dumped. This directory must exist,
+;as no effort is made to create it automatically.
 
-dumpdir="/mysql-backup/db-backups"
+dumpdir="/home/mysql-backup/db-backups"
 
 ;*/
 

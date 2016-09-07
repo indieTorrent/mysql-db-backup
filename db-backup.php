@@ -15,6 +15,10 @@ if ($conf === FALSE) {
 	die('Configuration values could not be read from "' . $configFile . '"; ensure that the file exists and contains valid configuration parameters' . PHP_EOL);
 }
 
+if (empty($conf['connection']['password'])) {
+	$conf['connection']['password'] = NULL;
+}
+
 $mysqli = new mysqli($conf['connection']['hostname'], $conf['connection']['username'], $conf['connection']['password']);
 
 if ($mysqli->connect_error) {
@@ -47,7 +51,13 @@ while ($row = $r->fetch_assoc()) {
 	//Also, the dump file cannot be compressed before its hash is checked, because
 	//each compression attempt yields a different file (even with identical input).
 	
-	$cmd = 'mysqldump --skip-comments --add-drop-table --default-character-set=utf8 --extended-insert --host=localhost --quick --quote-names --routines --set-charset --single-transaction --triggers --tz-utc --verbose --user=root --password=\'' . $conf['connection']['password'] . '\' "' . $row['Database'] . '" > "' . $dumpFileName . '"';
+	$cmd = 'mysqldump --skip-comments --add-drop-table --default-character-set=utf8 --extended-insert --host=localhost --quick --quote-names --routines --set-charset --single-transaction --triggers --tz-utc --verbose --user=' . $conf['connection']['username'];
+	
+	if (!empty($conf['connection']['password'])) {
+		$cmd .= ' --password=\'' . $conf['connection']['password'] . '\'';
+	}
+	
+	$cmd .= ' "' . $row['Database'] . '" > "' . $dumpFileName . '"';
 	
 	$return = system($cmd);
 	

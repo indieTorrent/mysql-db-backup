@@ -235,11 +235,15 @@ Edit `db-backup.ini`:
 ```ini
 [connection]
 hostname = localhost
+port = 3306
 username = your_mysql_user
 password = your_mysql_password
+; ssl_ca = /etc/ssl/certs/db-ca.pem
 
 [backup]
 dumpdir = /path/to/backups
+; databases = app,analytics
+; dump_options = --set-gtid-purged=OFF
 ```
 
 **Note:** The `password` field is optional if you're using socket-based authentication (e.g., `auth_socket` plugin in MariaDB).
@@ -250,10 +254,38 @@ You can also configure using environment variables:
 
 ```bash
 export DB_HOST=127.0.0.1      # Use 127.0.0.1, not localhost (for Docker)
+export DB_PORT=3306           # Optional; managed databases often use another port
 export DB_USERNAME=your_mysql_user
 export DB_PASSWORD=your_mysql_password
+export DB_SSL_CA=/path/to/ca.pem          # Optional; require TLS and verify the server against this CA
+export DB_DATABASES=app,analytics         # Optional; default is every non-system database
+export MYSQLDUMP_EXTRA_OPTIONS='--set-gtid-purged=OFF'  # Optional; appended to mysqldump as-is
 export BACKUP_DIR=/path/to/backups
 ```
+
+### Managed / hosted databases
+
+Managed MySQL services (DigitalOcean, RDS, Cloud SQL, ...) typically listen on a
+non-standard port, require TLS, and expose a `defaultdb` alongside your own
+database. `DB_PORT` and `DB_SSL_CA` cover the first two; `DB_DATABASES` pins the
+backup to the databases you actually own.
+
+When `DB_SSL_CA` is set, the server certificate is verified against that file
+both for the connection that lists databases and for each `mysqldump` run. The
+verification flag differs between MySQL's `mysqldump` (`--ssl-mode=VERIFY_CA`)
+and MariaDB's (`--ssl-verify-server-cert`); the tool detects which client is
+installed and passes the right one.
+
+If your server has GTIDs enabled and you dump it with MySQL's own `mysqldump`,
+add `--set-gtid-purged=OFF` via `MYSQLDUMP_EXTRA_OPTIONS`, or the dump will
+carry a `SET @@GLOBAL.GTID_PURGED` statement that a plain restore user cannot
+execute. MariaDB's `mysqldump` never emits that statement and rejects the flag.
+
+Dumps are taken with `--default-character-set=utf8mb4`. Earlier releases used
+`utf8`, which MySQL and MariaDB treat as the 3-byte `utf8mb3`: the server
+transcoded results on the wire and every 4-byte character (emoji, many CJK
+ideographs) reached the dump as a literal `?`. If your data contains such
+characters, dumps made before this change are lossy for them.
 
 ## Usage
 

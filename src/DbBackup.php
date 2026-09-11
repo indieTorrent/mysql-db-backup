@@ -73,9 +73,20 @@ class DbBackup
         // Use environment variables as fallback or override
         $this->config = [
             'hostname' => $config['connection']['hostname'] ?? getenv('DB_HOST') ?: 'localhost',
+            'port' => (int) ($config['connection']['port'] ?? getenv('DB_PORT') ?: 3306),
             'username' => $config['connection']['username'] ?? getenv('DB_USERNAME') ?: '',
             'password' => $config['connection']['password'] ?? getenv('DB_PASSWORD') ?: null,
+            // Path to a CA bundle. When set, both the mysqli connection and mysqldump
+            // require TLS and verify the server's certificate against it — what a
+            // managed/hosted database (DigitalOcean, RDS, ...) expects.
+            'ssl_ca' => $config['connection']['ssl_ca'] ?? getenv('DB_SSL_CA') ?: null,
             'dumpdir' => $config['backup']['dumpdir'] ?? getenv('BACKUP_DIR') ?: '/backups',
+            // Optional comma-separated allow-list of databases. Empty means "every
+            // non-system database the user can see", the historical behaviour.
+            'databases' => self::parseList($config['backup']['databases'] ?? getenv('DB_DATABASES') ?: ''),
+            // Extra options appended verbatim (whitespace-split) to mysqldump, for
+            // server- or client-specific flags such as --set-gtid-purged=OFF.
+            'dump_options' => self::parseOptions($config['backup']['dump_options'] ?? getenv('MYSQLDUMP_EXTRA_OPTIONS') ?: ''),
         ];
 
         // Ensure password is null if empty (for socket-based auth)
@@ -91,6 +102,44 @@ class DbBackup
         if (empty($this->config['dumpdir'])) {
             throw new Exception('Backup directory must be specified in config file or BACKUP_DIR environment variable');
         }
+
+        if ($this->config['port'] < 1 || $this->config['port'] > 65535) {
+            throw new Exception('Database port must be between 1 and 65535 (config file or DB_PORT environment variable)');
+        }
+
+        if ($this->config['ssl_ca'] !== null && !is_readable($this->config['ssl_ca'])) {
+            throw new Exception('The CA bundle "' . $this->config['ssl_ca'] . '" (DB_SSL_CA) does not exist or is not readable');
+        }
+
+        foreach ($this->config['databases'] as $database) {
+            // Names are used as directory names under dumpdir, so anything that
+            // could escape that directory is refused outright.
+            if (preg_match('/^[A-Za-z0-9_$-]+$/', $database) !== 1) {
+                throw new Exception('Refusing to back up database with unsafe name "' . $database . '"');
+            }
+        }
+    }
+
+    /**
+     * Split a comma-separated list into trimmed, non-empty items
+     *
+     * @param string $value Comma-separated list
+     * @return string[]
+     */
+    private static function parseList(string $value): array
+    {
+        return array_values(array_filter(array_map('trim', explode(',', $value)), 'strlen'));
+    }
+
+    /**
+     * Split a whitespace-separated option string into individual options
+     *
+     * @param string $value Whitespace-separated options
+     * @return string[]
+     */
+    private static function parseOptions(string $value): array
+    {
+        return preg_split('/\s+/', trim($value), -1, PREG_SPLIT_NO_EMPTY) ?: [];
     }
 
     /**
@@ -100,17 +149,35 @@ class DbBackup
      */
     private function connectToDatabase(): void
     {
-        $this->mysqli = new mysqli(
+        // PHP >= 8.1 makes mysqli throw by default; older versions return false and
+        // set connect_error. Report both the same way.
+        mysqli_report(MYSQLI_REPORT_OFF);
+
+        $this->mysqli = mysqli_init();
+        $flags = 0;
+
+        if ($this->config['ssl_ca'] !== null) {
+            $this->mysqli->ssl_set(null, null, $this->config['ssl_ca'], null, null);
+            $flags |= MYSQLI_CLIENT_SSL;
+        }
+
+        $connected = @$this->mysqli->real_connect(
             $this->config['hostname'],
             $this->config['username'],
-            $this->config['password']
+            $this->config['password'],
+            null,
+            $this->config['port'],
+            null,
+            $flags
         );
 
-        if ($this->mysqli->connect_error) {
+        if (!$connected) {
             throw new Exception(
-                'Connect Error (' . $this->mysqli->connect_errno . ') ' . $this->mysqli->connect_error
+                'Connect Error (' . mysqli_connect_errno() . ') ' . mysqli_connect_error()
             );
         }
+
+        $this->mysqli->set_charset('utf8mb4');
     }
 
     /**
@@ -149,6 +216,10 @@ class DbBackup
      */
     private function getDatabases(): array
     {
+        if ($this->config['databases'] !== []) {
+            return $this->config['databases'];
+        }
+
         $databases = [];
         $result = $this->mysqli->query('SHOW DATABASES');
 
@@ -190,18 +261,35 @@ class DbBackup
         // Build mysqldump command
         // --skip-comments: Ensures hash checks work correctly (comments include timestamps)
         // --single-transaction: Ensures consistency without locking tables
+        // --default-character-set=utf8mb4: "utf8" is an alias for the 3-byte utf8mb3 on
+        //   both MySQL and MariaDB, so the server transcodes results to it on the wire
+        //   and every 4-byte character (emoji, many CJK ideographs) leaves the dump as
+        //   a literal "?". The data is only corrupt in the backup, which is the worst
+        //   place to discover it. utf8mb4 is lossless for anything the server stores.
         // --no-tablespaces: Skips the tablespace dump, which on MySQL 8.0 requires the
         //   global PROCESS privilege. Without it, unprivileged backup users get a
         //   non-fatal "Access denied; you need (at least one of) the PROCESS
         //   privilege(s)" error. Tablespace metadata isn't needed to restore a
         //   standard InnoDB database, so skipping it is safe and silences the error.
         $cmd = sprintf(
-            'mysqldump --skip-comments --add-drop-table --default-character-set=utf8 ' .
-            '--extended-insert --host=%s --no-tablespaces --quick --quote-names --routines ' .
+            'mysqldump --skip-comments --add-drop-table --default-character-set=utf8mb4 ' .
+            '--extended-insert --host=%s --port=%d --no-tablespaces --quick --quote-names --routines ' .
             '--set-charset --single-transaction --triggers --tz-utc --verbose --user=%s',
             escapeshellarg($this->config['hostname']),
+            $this->config['port'],
             escapeshellarg($this->config['username'])
         );
+
+        if ($this->config['ssl_ca'] !== null) {
+            $cmd .= ' --ssl-ca=' . escapeshellarg($this->config['ssl_ca']);
+            // The two client families spell "verify the server certificate" differently
+            // and each rejects the other's flag, so pick by the binary actually present.
+            $cmd .= $this->dumpClientIsMariaDb() ? ' --ssl-verify-server-cert' : ' --ssl-mode=VERIFY_CA';
+        }
+
+        foreach ($this->config['dump_options'] as $option) {
+            $cmd .= ' ' . escapeshellarg($option);
+        }
 
         if (!empty($this->config['password'])) {
             $cmd .= ' --password=' . escapeshellarg($this->config['password']);
@@ -241,6 +329,19 @@ class DbBackup
         } else {
             echo 'File was gzipped successfully to ' . $gzipped . PHP_EOL;
         }
+    }
+
+    /**
+     * Whether the mysqldump on PATH is MariaDB's client rather than MySQL's
+     *
+     * @return bool
+     */
+    private function dumpClientIsMariaDb(): bool
+    {
+        $output = [];
+        exec('mysqldump --version 2>&1', $output);
+
+        return stripos(implode(' ', $output), 'mariadb') !== false;
     }
 
     /**

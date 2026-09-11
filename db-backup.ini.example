@@ -13,6 +13,16 @@
 
 hostname="localhost"
 
+;The TCP port. Managed databases commonly listen on a non-default port.
+
+;port=3306
+
+;Path to a CA bundle. When set, the connection requires TLS and the server's
+;certificate is verified against this file (both for the database listing and
+;for mysqldump). Leave unset for a local or socket connection.
+
+;ssl_ca="/etc/ssl/certs/db-ca.pem"
+
 ;The user as whom to query the list of database names to be backed-up, and then
 ;call the "mysqldump" executable against each.
 ;This user need not necessarily be the root MySQL user, but the specific user
@@ -34,6 +44,17 @@ username="mysql-backup"
 ;as no effort is made to create it automatically.
 
 dumpdir="/home/mysql-backup/db-backups"
+
+;Comma-separated list of databases to back up. When unset, every non-system
+;database visible to the user is backed up.
+
+;databases="app,analytics"
+
+;Extra options passed to mysqldump as-is, separated by whitespace. Use this for
+;server- or client-specific flags, e.g. --set-gtid-purged=OFF when dumping a
+;GTID-enabled MySQL server with MySQL's own mysqldump.
+
+;dump_options="--set-gtid-purged=OFF"
 
 ;*/
 
